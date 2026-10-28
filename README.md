@@ -142,6 +142,5 @@ tar -a -c -f kb-automation-2.0.2.zip -C <父目录> kb-automation
 ## 开发
 
 ```bash
-node --check index.js
-node test/smoke.mjs   # frontmatter 往返、命名规则、MOC 插入、目录树
+for f in index.js src/*.js; do node --check "$f" || exit 1; done
 ```
