@@ -18,20 +18,55 @@ D:\dsh-plugins\kb-automation
 
 目录里应该有 `package.json`、`cordis.patch.yml`、`index.js`、`src\`。这个路径后面会一直被引用，装完后不要移动或删除。
 
-## 2. 改配置
+## 2. 配置工作地址（先由 setup 确认）
 
-打开 `cordis.patch.yml`，把 `vault` 改成这台机器上的实际位置：
+装好之后，**第一件事是让会话跑一次 setup**，由它把默认工作地址呈给你确认：
 
-```yaml
-- insert:
-    - id: kb-automation
-      name: '@local/kb-automation'
-      config:
-        vault: D:/我的知识库        # 知识库根目录，不存在会自动创建六个中文目录
-        maxCollect: 6
+```json
+{ "stage": "setup" }
 ```
 
-`vault` 也可以不写死在配置里：调用工具时传 `vault` 参数即可覆盖（适合一次装好、多个库切换）。
+返回里 `configured:false` 时，`needsInput.fields` 给出四个待确认字段与默认值：
+
+| 字段 | 含义 | 默认值来源 |
+| --- | --- | --- |
+| `vault` | 默认工作地址（知识库根目录，必填，必须是绝对路径） | `cordis.patch.yml` 的 `vault` |
+| `collect.topics` | 每日收集的检索主题（数组） | 当前生效的主题列表 |
+| `collect.limit` | 每轮最多收录几篇（1–7） | 当前生效值 |
+| `collect.maxAgeDays` | 只收最近几天的内容（≥ 1） | 当前生效值 |
+
+确认后把这些值带上再调一次，配置就落盘了：
+
+```json
+{ "stage": "setup", "vault": "D:/我的知识库", "limit": 5 }
+```
+
+之后重跑 `{"stage":"setup"}` 只会回显当前配置，不再询问。
+
+### 2.1 配置文件在哪、怎么改
+
+```text
+C:\Users\<你>\.dsh\kb-automation\config.json
+```
+
+这个文件在**插件包外面**，插件升级（整包替换）不会丢；也可以直接手改，下一次调用就生效（每次调用都重读，不缓存、不用重启）。
+
+```json
+{
+  "version": 1,
+  "vault": "D:/我的知识库",
+  "collect": { "topics": ["AI Agent 最新进展", "AI 落地 案例"], "limit": 6, "maxAgeDays": 2 },
+  "updatedAt": "2026-10-28T12:00:00.000Z"
+}
+```
+
+取值优先级：**调用参数 > 配置文件 > 插件 config（`cordis.patch.yml`）> 内置默认**。所以 `cordis.patch.yml` 里的 `vault` 只是首次 setup 的默认值与兜底值，想临时换个库直接传参数即可：
+
+```json
+{ "stage": "status", "vault": "E:/另一个库" }
+```
+
+环境变量 `KB_CONFIG_HOME` 只是给测试用的（把配置目录重定向到临时目录），正常使用不要设置。
 
 ## 3. 安装
 
@@ -49,7 +84,7 @@ D:\dsh-plugins\kb-automation
 { "stage": "status" }
 ```
 
-能返回目录篇数和 `构建：kb-automation@2.0.1` 就说明工具已注册。
+能返回目录篇数和 `构建：kb-automation@2.1.0` 就说明工具已注册。第一次还没配置过时，先跑 `{"stage":"setup"}` 确认工作地址（见第 2 节）。
 
 再跑一次模型自检，确认模型和检索都通：
 
@@ -63,8 +98,9 @@ D:\dsh-plugins\kb-automation
 
 | 目的 | 调用 |
 | --- | --- |
+| 首次确认/改配置 | `{"stage":"setup"}`（带 `vault`/`topics`/`limit`/`maxAgeDays` 即为写入） |
 | 建库/补齐结构 | `{"stage":"init"}` |
-| 收集今天的内容 | `{"stage":"collect","limit":5}` |
+| 收集今天的内容 | `{"stage":"collect","limit":5}`（时效可用 `maxAgeDays` 覆盖） |
 | 整理收件箱 | `{"stage":"process"}` |
 | 巡检 + 周报 | `{"stage":"inspect"}` |
 | 全流程 | `{"stage":"all"}` |
@@ -114,7 +150,16 @@ D:\dsh-plugins\kb-automation
 | 收件箱笔记没被处理 | `status` 不是 `inbox`，或正文不足 40 字，或没有可用模型 | 看结果里的 `kept` 字段，它写明每条未处理的原因 |
 | 收集阶段 0 篇 | 检索结果都过期/重复，或抓不到正文 | 看 `warnings` 与 `rejected`，少收几篇时结果里会说明原因 |
 
-## 7. v2 变更（1.1.0 → 2.0.0）
+## 7. v2 变更（1.1.0 → 2.1.0）
+
+### 2.1.0：配置搬出插件包
+
+- 工作地址与收集配置写进 `~/.dsh/kb-automation/config.json`（插件包外面，升级不丢），由新增的 `setup` 阶段首次确认。
+- 取值优先级统一为：调用参数 > 配置文件 > 插件 config > 内置默认；`cordis.patch.yml` 的 `vault` 退为默认值与兜底。
+- 手改配置文件立即生效（每次调用都重读）；写盘是原子的。
+- 新参数 `maxAgeDays`；`vault` 必须是绝对路径，否则报错「工作地址必须是绝对路径」。
+
+### 2.0.0
 
 - `process` 现在会在归档成功后**删除** `01 收件箱` 里的副本（旧版只改 `status` 留在收件箱）。
 - `01 收件箱` 收窄为「待提炼暂存区」，并接受没有 frontmatter 的裸 `.md`。

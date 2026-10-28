@@ -1,5 +1,6 @@
 import path from 'node:path'
 import { ensureDir, exists, readText, writeText } from './util.js'
+import { configPath } from './config.js'
 import { FOLDERS, NOTE_KINDS, REQUIRED_DIRS, SPEC_PATH, TEMPLATE_PATH, Vault } from './vault.js'
 
 export const TEMPLATE_CONTENT = `---
@@ -134,7 +135,7 @@ export async function runInit({ ctx, vaultRoot, config }) {
         await ensureDir(dir)
       } catch (error) {
         throw new Error(
-          `无法创建知识库目录 ${dir}：${error.message}。请确认 cordis.patch.yml 里的 vault 指向本机可写路径（当前：${vault.root}）。`,
+          `无法创建知识库目录 ${dir}：${error.message}。请确认工作地址指向本机可写路径（配置：${configPath()}；兜底：cordis.patch.yml 的 vault；当前：${vault.root}）。`,
         )
       }
       created.push(`${folder}/`)

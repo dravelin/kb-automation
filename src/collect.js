@@ -218,19 +218,21 @@ function normalizeUrl(value) {
   return String(value ?? '').replace(/[#?].*$/, '').replace(/\/+$/, '').toLowerCase()
 }
 
-export async function runCollect({ ctx, vaultRoot, config, signal, limit, topicList }) {
+export async function runCollect({ ctx, vaultRoot, config, signal, limit, topics, maxAgeDays: maxAgeDaysArg, topicList }) {
   const vault = new Vault(vaultRoot)
+  const warnings = []
+  const usedTopics = topics?.length ? topics : topicList?.length ? topicList : config?.topics?.length ? config.topics : DEFAULT_TOPICS
+  const maxCollect = Math.max(1, Math.min(Math.trunc(Number(limit ?? config?.maxCollect ?? 6) || 6), 7))
+  const maxAgeDays = Math.max(1, Math.trunc(Number(maxAgeDaysArg ?? config?.maxAgeDays ?? 2) || 2))
+  const used = { topics: usedTopics, limit: maxCollect, maxAgeDays }
+
   const web = ctx.get('web')
   if (!web) {
-    return { ok: false, stage: 'collect', summary: 'web 服务不可用，跳过收集。', warnings: ['当前 profile 没有可用的 web 检索服务。'], created: [] }
+    return { ok: false, stage: 'collect', summary: 'web 服务不可用，跳过收集。', warnings: ['当前 profile 没有可用的 web 检索服务。'], created: [], ...used }
   }
 
-  const warnings = []
-  const topics = topicList?.length ? topicList : config?.topics?.length ? config.topics : DEFAULT_TOPICS
-  const maxCollect = Math.max(1, Math.min(Number(limit ?? config?.maxCollect ?? 6) || 6, 7))
-
   const raw = []
-  for (const query of topics) {
+  for (const query of usedTopics) {
     try {
       const result = await web.search({ query, maxResults: 8 })
       for (const source of result.sources ?? []) {
@@ -248,7 +250,7 @@ export async function runCollect({ ctx, vaultRoot, config, signal, limit, topicL
   }
 
   if (!raw.length) {
-    return { ok: false, stage: 'collect', summary: '检索没有返回任何候选内容。', warnings, created: [] }
+    return { ok: false, stage: 'collect', summary: '检索没有返回任何候选内容。', warnings, created: [], ...used }
   }
 
   const corpus = await vault.corpus()
@@ -269,13 +271,12 @@ export async function runCollect({ ctx, vaultRoot, config, signal, limit, topicL
   }
   if (skippedForeign) warnings.push(`跳过 ${skippedForeign} 条非中文来源（日文/韩文标题）。`)
   if (!candidates.length) {
-    return { ok: true, stage: 'collect', summary: '检索到的内容都已收录过，本次没有新增。', warnings, created: [], considered: raw.length }
+    return { ok: true, stage: 'collect', summary: '检索到的内容都已收录过，本次没有新增。', warnings, created: [], considered: raw.length, ...used }
   }
 
   // Fetch page text first: the search provider returns titles and URLs only, so a pick
   // without body text cannot produce an honest summary.
   const fetchMode = String(config?.fetchMode ?? 'auto')
-  const maxAgeDays = Math.max(0, Number(config?.maxAgeDays ?? 2) || 2)
   const prefetch = candidates.slice(0, PREFETCH_LIMIT)
   const fetched = await mapLimit(prefetch, 4, async (item) => {
     const page = await fetchPageText(ctx, item.url, fetchMode)
@@ -313,6 +314,7 @@ export async function runCollect({ ctx, vaultRoot, config, signal, limit, topicL
       considered: raw.length,
       created: [],
       rejected: [],
+      ...used,
     }
   }
 
@@ -324,7 +326,7 @@ export async function runCollect({ ctx, vaultRoot, config, signal, limit, topicL
     try {
       const reply = await complete(ctx, {
         system: SYSTEM_PROMPT,
-        prompt: buildSelectionPrompt(pool, existingTitles, topics, maxCollect),
+        prompt: buildSelectionPrompt(pool, existingTitles, usedTopics, maxCollect),
         signal,
         maxTokens: 2200,
       })
@@ -488,5 +490,6 @@ export async function runCollect({ ctx, vaultRoot, config, signal, limit, topicL
     created,
     rejected,
     usedModel,
+    ...used,
   }
 }

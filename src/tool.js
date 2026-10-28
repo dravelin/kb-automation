@@ -4,11 +4,14 @@ import { runCollect } from './collect.js'
 import { runProcess } from './process.js'
 import { runInspect } from './inspect.js'
 import { complete, currentModel, extractJson, llmReady } from './llm.js'
+import { configPath, loadConfig, resolveSettings, saveConfig } from './config.js'
 
-export const DEFAULT_VAULT = 'F:/dataobs'
-export const BUILD = 'kb-automation@2.0.3'
+export const BUILD = 'kb-automation@2.1.0'
+
+const SETUP_KEYS = ['vault', 'topics', 'limit', 'maxAgeDays']
 
 const STAGE_LABEL = {
+  setup: '配置',
   init: '建库',
   collect: '收集',
   process: '整理',
@@ -83,7 +86,73 @@ function summarizeStage(result) {
   return result.summary
 }
 
-async function runStatus({ vaultRoot, config }) {
+function withSettings(result, settings) {
+  if (!settings.warnings.length) return result
+  return { ...result, warnings: [...new Set([...(result?.warnings ?? []), ...settings.warnings])] }
+}
+
+function setupFields(settings) {
+  return {
+    fields: [
+      { key: 'vault', label: '默认工作地址', defaultValue: settings.vault, required: true },
+      { key: 'collect.topics', label: '每日收集的检索主题（数组）', defaultValue: settings.topics, required: false },
+      { key: 'collect.limit', label: '每轮最多收录几篇（1-7）', defaultValue: settings.limit, required: false },
+      { key: 'collect.maxAgeDays', label: '只收最近几天的内容', defaultValue: settings.maxAgeDays, required: false },
+    ],
+  }
+}
+
+async function runSetup({ args, pluginConfig }) {
+  const loaded = loadConfig()
+  const warnings = [...loaded.warnings]
+  const provided = SETUP_KEYS.some((key) => args?.[key] !== undefined && args?.[key] !== null)
+  let stored = loaded.config
+
+  if (provided) {
+    const picked = resolveSettings({ args, pluginConfig })
+    stored = saveConfig({
+      vault: picked.vault,
+      collect: { topics: picked.topics, limit: picked.limit, maxAgeDays: picked.maxAgeDays },
+    })
+    warnings.push(...picked.warnings)
+  }
+
+  const settings = resolveSettings({ args: {}, pluginConfig })
+  for (const line of settings.warnings) if (!warnings.includes(line)) warnings.push(line)
+  const configFile = configPath()
+
+  if (!loaded.exists && !provided) {
+    return {
+      ok: true,
+      stage: 'setup',
+      vault: settings.vault,
+      configFile,
+      warnings,
+      configured: false,
+      needsInput: setupFields(settings),
+      summary: '尚未配置工作地址，请先确认默认工作地址。',
+    }
+  }
+
+  return {
+    ok: true,
+    stage: 'setup',
+    vault: settings.vault,
+    configFile,
+    warnings,
+    configured: true,
+    config: {
+      version: stored.version ?? 1,
+      vault: settings.vault,
+      collect: { topics: settings.topics, limit: settings.limit, maxAgeDays: settings.maxAgeDays },
+      updatedAt: stored.updatedAt ?? null,
+    },
+    source: settings.source,
+    summary: provided ? '配置已写入，后续阶段按新值执行。' : '配置文件已存在，本次只回显，不重复询问。',
+  }
+}
+
+async function runStatus({ vaultRoot, config, settings }) {
   const vault = new Vault(vaultRoot)
   const inbox = await vault.inboxNotes()
   const notes = await vault.noteNotes()
@@ -99,15 +168,25 @@ async function runStatus({ vaultRoot, config }) {
     vault: vault.root.replace(/\\/g, '/'),
     counts: { inbox: inbox.length, pending: pending.length, notes: notes.length, raw: raw.length, moc: moc.length, outputs: outputs.length },
     pending: pending.map((note) => `${FOLDERS.inbox}/${note.name}`),
-    config: { topics: config?.topics ?? null, maxCollect: config?.maxCollect ?? null, linkCheckLimit: config?.linkCheckLimit ?? null },
+    config: {
+      vault: settings.vault,
+      topics: settings.topics,
+      limit: settings.limit,
+      maxAgeDays: settings.maxAgeDays,
+      linkCheckLimit: config?.linkCheckLimit ?? null,
+      source: settings.source,
+      file: settings.configFile,
+    },
   }
 }
 
-function runBoard({ vault }) {
-  const root = vault.replace(/\\/g, '/')
+function runBoard({ settings }) {
+  const root = settings.vault.replace(/\\/g, '/')
   const timeZone = 'Asia/Shanghai'
+  const topics = settings.topics
   const dailyPrompt =
     `调用 kb_automate 工具，依次执行两个阶段：先 {"stage":"collect","vault":"${root}"}，再 {"stage":"process","vault":"${root}"}。` +
+    `本次按配置的 ${topics.length} 个主题检索，最多收录 ${settings.limit} 篇，只收最近 ${settings.maxAgeDays} 天内的内容（主题：${topics.join(' / ')}）。` +
     'process 只处理 01 收件箱里 status=inbox 的笔记，以及没有 frontmatter 的裸 .md（插件会补日期与 frontmatter），其余笔记跳过。' +
     '全部跑完后用简洁中文汇报：collect 新收录几篇及标题；process 处理了几篇、拆出几条原子笔记、更新了哪些主题索引、清理了哪些收件箱副本；' +
     '以及保留在收件箱待人工处理的笔记和原因。'
@@ -145,6 +224,27 @@ function renderResult(args, value) {
   const lines = [`## 知识库${STAGE_LABEL[value.stage] ?? value.stage}`]
   if (value.vault) lines.push(`- 仓库：\`${value.vault}\``)
   lines.push('', value.summary ?? '')
+
+  if (value.stage === 'setup') {
+    if (value.configFile) lines.push(`- 配置文件：\`${value.configFile}\``)
+    if (value.configured === false) {
+      lines.push('', '**待确认字段**')
+      for (const field of value.needsInput?.fields ?? []) {
+        const shown = Array.isArray(field.defaultValue) ? field.defaultValue.join('、') : String(field.defaultValue ?? '')
+        lines.push(`- ${field.key}（${field.label}）：默认值 = ${shown}${field.required ? '（必填）' : ''}`)
+      }
+      lines.push('', '请把确认后的值发给我（带上修改过的字段即可），我再写进配置。')
+    } else {
+      if (value.config) {
+        lines.push('', '**当前配置**')
+        lines.push(`- vault：\`${value.config.vault}\`（来源 ${value.source?.vault ?? '—'}）`)
+        lines.push(`- collect.topics：${(value.config.collect?.topics ?? []).join('、')}（来源 ${value.source?.topics ?? '—'}）`)
+        lines.push(`- collect.limit：${value.config.collect?.limit}（来源 ${value.source?.limit ?? '—'}）`)
+        lines.push(`- collect.maxAgeDays：${value.config.collect?.maxAgeDays}（来源 ${value.source?.maxAgeDays ?? '—'}）`)
+        if (value.config.updatedAt) lines.push(`- updatedAt：${value.config.updatedAt}`)
+      }
+    }
+  }
 
   if (value.stage === 'init') {
     if (value.created?.length) lines.push('', '**新建**', ...value.created.map((item) => `- ${item}`))
@@ -261,7 +361,8 @@ export function createTool(ctx, config) {
   const tool = {
     name: 'kb_automate',
     description:
-      'Knowledge-base automation for the vault at F:/dataobs. One tool, six stages: ' +
+      'Knowledge-base automation for the vault at F:/dataobs. One tool, seven stages: ' +
+      'setup (first-run configuration: without a config file it returns the fields to confirm — vault, collect topics, limit, maxAgeDays — and writes ~/.dsh/kb-automation/config.json once values are passed; call it again with parameters to change them later), ' +
       'init (verify/create the six Chinese folder skeleton, 笔记模板.md, 知识库规范.md), ' +
       'collect (search the web for today\'s AI Agent / AI pricing / AI case material and drop notes into 01 收件箱), ' +
       'process (move every status=inbox note into 02 原始资料, split it into atomic notes under 03 提炼笔记/{概念,方法,案例}, tag them, and link them from 04 主题索引), ' +
@@ -277,19 +378,21 @@ export function createTool(ctx, config) {
       properties: {
         stage: {
           type: 'string',
-          enum: ['init', 'collect', 'process', 'inspect', 'board', 'all', 'status', 'selftest'],
+          enum: ['setup', 'init', 'collect', 'process', 'inspect', 'board', 'all', 'status', 'selftest'],
           description:
             'Which pipeline stage to run. all = init → collect → process → inspect. ' +
+            'setup = first-run configuration interview + persistent config file (~/.dsh/kb-automation/config.json, survives plugin upgrades); ' +
             'board = 建卡方案 only (no file writes; the session must call task_board_create then task_board_schedule). ' +
             'selftest only probes the model route.',
         },
-        vault: { type: 'string', description: 'Vault root. Defaults to the plugin config (F:/dataobs).' },
+        vault: { type: 'string', description: 'Vault root. Effective value: this argument > config file > plugin config (F:/dataobs).' },
         topics: {
           type: 'array',
           items: { type: 'string' },
-          description: 'Optional collect queries; overrides the configured topic list for this call.',
+          description: 'Collect queries. Effective value: this argument > config file > plugin config > built-in defaults.',
         },
-        limit: { type: 'number', description: 'collect: max notes to add (1-7). Also caps notes processed per run.' },
+        limit: { type: 'number', description: 'collect: max notes to add (1-7, clamped). Also caps notes processed per run.' },
+        maxAgeDays: { type: 'number', description: 'collect: keep only material published within N days (>= 1). Defaults to 2.' },
       },
       required: ['stage'],
       additionalProperties: false,
@@ -317,50 +420,55 @@ export function createTool(ctx, config) {
     },
     async execute(args, exec) {
       const stage = String(args?.stage ?? 'status')
-      const vaultRoot = String(args?.vault ?? config?.vault ?? DEFAULT_VAULT)
       const signal = exec?.signal
-      const limit = args?.limit
-      const topics = Array.isArray(args?.topics) ? args.topics.map((item) => String(item)).filter(Boolean) : null
+      const pluginConfig = config ?? {}
+      const callArgs = { vault: args?.vault, topics: args?.topics, limit: args?.limit, maxAgeDays: args?.maxAgeDays }
 
+      if (stage === 'setup') {
+        return JSON.parse(JSON.stringify(await runSetup({ args: callArgs, pluginConfig })))
+      }
+
+      const settings = resolveSettings({ args: callArgs, pluginConfig })
+      const vaultRoot = settings.vault
       const base = { vault: vaultRoot.replace(/\\/g, '/'), stage }
 
       if (stage === 'selftest') {
-        return JSON.parse(JSON.stringify({ ...(await runSelftest({ ctx, signal })), vault: base.vault }))
+        return JSON.parse(JSON.stringify(withSettings({ ...(await runSelftest({ ctx, signal })), vault: base.vault }, settings)))
       }
 
       if (stage === 'status') {
-        return JSON.parse(JSON.stringify({ ...(await runStatus({ vaultRoot, config })), ...base }))
+        return JSON.parse(JSON.stringify(withSettings({ ...(await runStatus({ vaultRoot, config, settings })), ...base }, settings)))
       }
 
       if (stage === 'init') {
-        return JSON.parse(JSON.stringify({ ...(await runInit({ ctx, vaultRoot, config })), ...base }))
+        return JSON.parse(JSON.stringify(withSettings({ ...(await runInit({ ctx, vaultRoot, config })), ...base }, settings)))
       }
 
       if (stage === 'collect') {
-        const result = await runCollect({ ctx, vaultRoot, config, signal, limit, topicList: topics })
-        return JSON.parse(JSON.stringify({ ...result, ...base }))
+        const result = await runCollect({ ctx, vaultRoot, config, signal, topics: settings.topics, limit: settings.limit, maxAgeDays: settings.maxAgeDays })
+        return JSON.parse(JSON.stringify(withSettings({ ...result, ...base }, settings)))
       }
 
       if (stage === 'process') {
-        const result = await runProcess({ ctx, vaultRoot, config, signal, limit })
-        return JSON.parse(JSON.stringify({ ...result, ...base }))
+        const result = await runProcess({ ctx, vaultRoot, config, signal, limit: args?.limit })
+        return JSON.parse(JSON.stringify(withSettings({ ...result, ...base }, settings)))
       }
       if (stage === 'inspect') {
         const result = await runInspect({ ctx, vaultRoot, config, signal })
-        return JSON.parse(JSON.stringify({ ...result, ...base }))
+        return JSON.parse(JSON.stringify(withSettings({ ...result, ...base }, settings)))
       }
 
       if (stage === 'board') {
-        return JSON.parse(JSON.stringify({ ...runBoard({ vault: vaultRoot }), ...base }))
+        return JSON.parse(JSON.stringify(withSettings({ ...runBoard({ settings }), ...base }, settings)))
       }
 
       if (stage === 'all') {
         const results = {}
         results.init = await runInit({ ctx, vaultRoot, config })
-        results.collect = await runCollect({ ctx, vaultRoot, config, signal, limit, topicList: topics })
-        results.process = await runProcess({ ctx, vaultRoot, config, signal })
+        results.collect = await runCollect({ ctx, vaultRoot, config, signal, topics: settings.topics, limit: settings.limit, maxAgeDays: settings.maxAgeDays })
+        results.process = await runProcess({ ctx, vaultRoot, config, signal, limit: args?.limit })
         results.inspect = await runInspect({ ctx, vaultRoot, config, signal })
-        const warnings = Object.values(results).flatMap((result) => result?.warnings ?? [])
+        const warnings = [...settings.warnings, ...Object.values(results).flatMap((result) => result?.warnings ?? [])]
         return JSON.parse(
           JSON.stringify({
             ok: true,

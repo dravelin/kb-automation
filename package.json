@@ -1,6 +1,6 @@
 {
   "name": "@local/kb-automation",
-  "version": "2.0.3",
+  "version": "2.1.0",
   "private": true,
   "type": "module",
   "description": "DSH Host plugin: runs the personal knowledge-base pipeline: 01 收件箱 stages both collected articles and user-dropped .md files, process archives them into 02 原始资料 and deletes only those archived inbox copies, plus atomic notes, weekly inspection, and a board stage that proposes daily/weekly scheduled task cards.",

@@ -1,3 +1,7 @@
+# 取值优先级（所有阶段一致）：调用参数 > 配置文件 > 这里的 config > 内置默认。
+# 配置文件路径：~/.dsh/kb-automation/config.json（在插件包外面，升级整包替换也不会丢），
+# 由 kb_automate {"stage":"setup"} 生成，也可以手改，改完下一次调用立即生效。
+# 下面的 vault 只是首次 setup 的默认值与兜底值。
 - insert:
     - id: kb-automation
       name: '@local/kb-automation'
