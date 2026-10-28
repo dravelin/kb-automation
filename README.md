@@ -1,8 +1,6 @@
 # 知识库自动化插件（kb-automation）
 
-把 `F:/test/11/1.md` 里那四段任务做成一个可重复执行的 DSH 工具：`kb_automate`。
-
-> **从 GitHub 安装（另一台电脑）**
+**从 GitHub 安装（另一台电脑）**
 >
 > ```bash
 > git clone https://github.com/dravelin/kb-automation.git D:/dsh-plugins/kb-automation
