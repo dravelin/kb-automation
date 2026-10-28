@@ -1,0 +1,7 @@
+- insert:
+    - id: kb-automation
+      name: '@local/kb-automation'
+      config:
+        vault: F:/dataobs
+        taskFile: F:/test/11/1.md
+        maxCollect: 6

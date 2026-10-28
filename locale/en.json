@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Knowledge Base Automation",
+    "description": "Runs the four-stage knowledge-base pipeline from 1.md: build the folder skeleton, collect fresh material, split it into atomic notes, and produce a weekly inspection report."
+  }
+}

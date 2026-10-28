@@ -1,0 +1,26 @@
+{
+  "name": "@local/kb-automation",
+  "version": "1.1.0",
+  "private": true,
+  "type": "module",
+  "description": "DSH Host plugin: runs the four-stage personal knowledge-base pipeline described in F:/test/11/1.md (build structure, collect, organize, inspect).",
+  "exports": {
+    ".": "./index.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "index.js",
+    "src/*.js",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "icon.svg",
+    "README.md",
+    "INSTALL.md"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}
