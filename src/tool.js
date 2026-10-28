@@ -6,7 +6,7 @@ import { runInspect } from './inspect.js'
 import { complete, currentModel, extractJson, llmReady } from './llm.js'
 
 export const DEFAULT_VAULT = 'F:/dataobs'
-export const BUILD = 'kb-automation@2.0.2'
+export const BUILD = 'kb-automation@2.0.3'
 
 const STAGE_LABEL = {
   init: '建库',
