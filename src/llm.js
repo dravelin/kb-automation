@@ -104,7 +104,14 @@ export function extractJson(text) {
   try {
     return JSON.parse(candidate.slice(start, end + 1))
   } catch {
-    return null
+    // 最小修复：模型常在对象后面多写一段说明、或多写一个尾逗号，按最后一个 } 截断并去掉尾逗号再试一次。
+    const tail = candidate.lastIndexOf('}')
+    if (tail < start) return null
+    try {
+      return JSON.parse(candidate.slice(start, tail + 1).replace(/,\s*([}\]])/g, '$1'))
+    } catch {
+      return null
+    }
   }
 }
 

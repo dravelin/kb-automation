@@ -50,7 +50,7 @@ D:\dsh-plugins\kb-automation
 { "stage": "status" }
 ```
 
-能返回目录篇数和 `构建：kb-automation@2.0.0` 就说明工具已注册。
+能返回目录篇数和 `构建：kb-automation@2.0.1` 就说明工具已注册。
 
 再跑一次模型自检，确认模型和检索都通：
 

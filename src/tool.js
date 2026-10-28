@@ -8,7 +8,7 @@ import { complete, currentModel, extractJson, llmReady } from './llm.js'
 
 export const DEFAULT_VAULT = 'F:/dataobs'
 export const DEFAULT_TASK_FILE = 'F:/test/11/1.md'
-export const BUILD = 'kb-automation@2.0.0'
+export const BUILD = 'kb-automation@2.0.1'
 
 const STAGE_LABEL = {
   init: '建库',
@@ -191,6 +191,10 @@ function renderResult(args, value) {
       lines.push('', '**已清理收件箱**')
       for (const item of value.removed) lines.push(`- \`${item}\``)
     }
+    if (value.unsplit?.length) {
+      lines.push('', '**未拆解（已归档）**')
+      for (const item of value.unsplit) lines.push(`- \`${item.file}\` → \`${item.archived}\`：${item.reason}`)
+    }
     if (value.kept?.length) {
       lines.push('', '**保留在收件箱**')
       for (const item of value.kept) lines.push(`- \`${item.file}\`：${item.reason}`)
@@ -214,6 +218,10 @@ function renderResult(args, value) {
     if (value.links) {
       lines.push('', `**链接**：检查 ${value.links.checked}/${value.links.total}，失效 ${value.links.broken.length}，无法验证 ${value.links.unverified.length}`)
       for (const item of value.links.broken) lines.push(`- HTTP ${item.status || '—'} ${item.url}`)
+    }
+    if (value.unsplit?.count) {
+      lines.push('', `**待补拆解**：${value.unsplit.count} 篇原文已归档进 02 原始资料，但还没有原子笔记。`)
+      for (const item of value.unsplit.files) lines.push(`- \`${item}\``)
     }
     if (value.stats) {
       lines.push(
@@ -276,7 +284,7 @@ export function createTool(ctx, config) {
       'all (init, collect, process, inspect in order). ' +
       '01 收件箱 is the staging area for raw articles still waiting to be processed: both what the plugin collected and .md files the user saved straight from a browser — frontmatter is optional, the plugin fills in the date and frontmatter. ' +
       'Notes are filed as YYYY-MM-DD-标题.md named after the collection day, with the original publication date kept in frontmatter published. ' +
-      'process is a move, not a merge: once an inbox note is archived into 02 原始资料 (also when 02 already holds a file of the same name) the 01 收件箱 copy is deleted; notes that fail to split stay in 01 收件箱 for manual handling. ' +
+      'process is a move, not a merge: once an inbox note is archived into 02 原始资料 (also when 02 already holds a file of the same name) the 01 收件箱 copy is deleted; a note whose splitting fails is archived anyway — it only lacks atomic notes, which the weekly report lists under 待补拆解, and only empty or too-short notes stay in 01 收件箱. ' +
       'The only deletion is that archived 01 收件箱 copy — files in 02 原始资料, 03 提炼笔记, 04 主题索引 and 05 我的产出 are never deleted or merged.',
     parameters: {
       type: 'object',

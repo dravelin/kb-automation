@@ -20,6 +20,15 @@ const SYSTEM_PROMPT = `你是个人知识库的整理助手，负责把收件箱
 3. 不编造原文没有的事实、数字、作者或链接。
 4. 标签只用「主题/值」「类型/值」「状态/值」三种前缀；frontmatter 里的标签不带 #。`
 
+// 7k 字符的原文加上原子笔记 JSON 常常超过 3000 tokens，被截断后整篇 JSON 都不可解析。
+const EXTRACT_MAX_TOKENS = 6000
+
+// 第一次回复 JSON 不可解析时的重试约束：条目更少、正文更短，只留一个能解析的对象。
+const STRICT_JSON_RETRY = `## 强制约束（上一次回复无法解析为 JSON，请严格遵守）
+- 只输出一个 JSON 对象，不要 markdown 代码块，不要任何解释。
+- atoms 最多 3 条；每条 body 不超过 200 字。
+- 字符串里不要换行，不要出现未转义的双引号，不要写注释或尾逗号。`
+
 // Titles that are section names or boilerplate rather than a reusable idea.
 const GENERIC_TITLES = new Set([
   '待核实', '收录理由', '摘要', '要点', '正文', '背景', '定义', '结论', '组件', '价格', '发布',
@@ -355,6 +364,7 @@ export async function runProcess({ ctx, vaultRoot, config, signal, limit }) {
   const removed = []
   const kept = []
   const newAtoms = []
+  const unsplit = []
   const mocChanges = []
   const usedTags = new Set()
   const heuristicFallback = config?.heuristicFallback === true
@@ -381,36 +391,40 @@ export async function runProcess({ ctx, vaultRoot, config, signal, limit }) {
     budget -= 1
 
     let extraction = null
+    let unsplitReason = ''
     if (llmReady(ctx)) {
       try {
-        const reply = await complete(ctx, {
-          system: SYSTEM_PROMPT,
-          prompt: buildPrompt(note, vocabulary, existingTitles, text),
-          signal,
-          maxTokens: 3000,
-        })
+        const prompt = buildPrompt(note, vocabulary, existingTitles, text)
+        const reply = await complete(ctx, { system: SYSTEM_PROMPT, prompt, signal, maxTokens: EXTRACT_MAX_TOKENS })
         extraction = extractJson(reply)
-        if (!extraction) warnings.push(`${note.name}：模型返回不是合法 JSON。`)
+        if (!extraction) {
+          const retry = await complete(ctx, {
+            system: SYSTEM_PROMPT,
+            prompt: `${prompt}\n\n${STRICT_JSON_RETRY}`,
+            signal,
+            maxTokens: EXTRACT_MAX_TOKENS,
+          })
+          extraction = extractJson(retry)
+          if (!extraction) {
+            unsplitReason = '模型两次返回都不是合法 JSON'
+            warnings.push(`${note.name}：模型返回不是合法 JSON（已按更严格的约束重试一次）。`)
+          }
+        }
       } catch (error) {
-        warnings.push(`${note.name}：模型拆解失败（${error.message}）。`)
+        unsplitReason = `模型拆解失败（${error.message}）`
+        warnings.push(`${note.name}：${unsplitReason}。`)
       }
+    } else {
+      unsplitReason = '当前没有可用模型，插件不会自行猜测拆分结果'
     }
 
     const rawTitle = asString(extraction?.raw?.title) || note.title
     const rawSummary = asString(extraction?.raw?.summary) || toSentence(sectionBody(note.body, '摘要') || note.body, 150)
     let atoms = Array.isArray(extraction?.atoms) ? extraction.atoms : []
     // Rule-based splitting only guesses structure. It is opt-in: a wrong atom is worse than
-    // leaving the note in the inbox with a reason.
+    // archiving the original and leaving the splitting to a human.
     if (!atoms.length && heuristicFallback) atoms = heuristicAtoms(note)
-    if (!atoms.length) {
-      kept.push({
-        file: `${FOLDERS.inbox}/${note.name}`,
-        reason: llmReady(ctx)
-          ? '模型没有给出可用的原子笔记（或返回的不是合法 JSON），保留在收件箱待人工拆分。'
-          : '当前没有可用模型，插件不会自行猜测拆分结果，保留在收件箱。',
-      })
-      continue
-    }
+    if (!atoms.length && !unsplitReason) unsplitReason = '模型没有给出可用的原子笔记'
 
     const cleanAtoms = []
     const seenTitles = new Set()
@@ -441,13 +455,15 @@ export async function runProcess({ ctx, vaultRoot, config, signal, limit }) {
     }
     if (rejectedAtoms.length) warnings.push(`${note.name}：拒收 ${rejectedAtoms.length} 条不合格的原子笔记（${rejectedAtoms.slice(0, 3).join('；')}）。`)
     if (!cleanAtoms.length) {
-      kept.push({ file: `${FOLDERS.inbox}/${note.name}`, reason: '模型给出的条目都不合格（标题过短、摘要/正文过短或过于笼统），保留在收件箱。' })
-      continue
+      unsplitReason = rejectedAtoms.length
+        ? '模型给出的条目都不合格（标题过短、摘要/正文过短或过于笼统）'
+        : unsplitReason || '模型没有给出可用的原子笔记'
+      warnings.push(`${note.name}：${unsplitReason}；原文照常归档，等人工补拆解。`)
     }
 
     const date = noteDate(note)
     const archive = await archiveOriginal(vault, note)
-    // 02 已有同名文件也算内容已归档（created 为 false），收件箱副本同样清理；kept 分支走不到这里
+    // 02 已有同名文件也算内容已归档（created 为 false），收件箱副本同样清理；只有空文件与正文过短留在 kept
     let removedFile = ''
     try {
       await deleteFile(note.path)
@@ -505,8 +521,13 @@ export async function runProcess({ ctx, vaultRoot, config, signal, limit }) {
       atoms: writtenAtoms,
       notes: asString(extraction?.notes),
       removed: Boolean(removedFile),
+      unsplit: !writtenAtoms.length,
     }
     if (removedFile) entry.removedFile = removedFile
+    if (entry.unsplit) {
+      entry.unsplitReason = unsplitReason
+      unsplit.push({ file: entry.file, archived: entry.archived, reason: unsplitReason })
+    }
     processed.push(entry)
   }
 
@@ -516,11 +537,12 @@ export async function runProcess({ ctx, vaultRoot, config, signal, limit }) {
     ok: true,
     stage: 'process',
     summary: processed.length
-      ? `处理 ${processed.length} 篇，拆出 ${newAtoms.length} 条原子笔记，更新 ${mocChanges.length} 处主题索引，清理收件箱 ${removed.length} 篇。`
+      ? `处理 ${processed.length} 篇，拆出 ${newAtoms.length} 条原子笔记，更新 ${mocChanges.length} 处主题索引，清理收件箱 ${removed.length} 篇${unsplit.length ? `，未拆解 ${unsplit.length} 篇（原文已归档，待补原子笔记）` : ''}。`
       : '收件箱没有待处理的 inbox 笔记。',
     warnings,
     processed,
     removed,
+    unsplit,
     kept,
     newAtoms,
     moc: mocChanges,

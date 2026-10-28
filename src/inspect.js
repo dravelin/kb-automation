@@ -166,6 +166,16 @@ async function checkLink(url) {
   }
 }
 
+function findUnsplit(rawNotes, notes) {
+  const referenced = new Set()
+  for (const note of notes) {
+    for (const match of String(note.source ?? '').matchAll(/\[\[([^\]|#]+)/g)) {
+      referenced.add(match[1].trim())
+    }
+  }
+  return rawNotes.filter((note) => !referenced.has(note.base)).sort((a, b) => a.name.localeCompare(b.name))
+}
+
 async function mapLimit(items, limit, worker) {
   const out = []
   let cursor = 0
@@ -239,7 +249,11 @@ export async function runInspect({ ctx, vaultRoot, config, signal }) {
   }
   const weekAddedNotes = allRecent.filter((note) => note.path.includes(FOLDERS.note))
 
-  // 5. Report
+  // 5. Archived originals that produced no atomic note yet
+  const unsplitAll = findUnsplit(rawNotes, notes)
+  const unsplitFiles = unsplitAll.slice(0, 10).map((note) => `${FOLDERS.raw}/${note.name}`)
+
+  // 6. Report
   const date = isoDate(today)
   const reportFile = path.join(vault.dir(FOLDERS.output), noteFileName(date, '知识库周报'))
   const problemCount = missing.length + duplicates.length + broken.length
@@ -268,6 +282,9 @@ export async function runInspect({ ctx, vaultRoot, config, signal }) {
   const folderLines = Object.entries(byFolder)
     .sort((a, b) => b[1] - a[1])
     .map(([folder, count]) => `- \`${folder}\`：${count} 篇`)
+  const unsplitLines = unsplitFiles.length
+    ? unsplitFiles.map((file) => `- \`${file}\``)
+    : ['- 没有待补拆解的原文。']
 
   const report = `---
 title: 知识库周报 ${date}
@@ -318,7 +335,13 @@ ${folderLines.join('\n') || '- （本周无新增）'}
 
 ${themeLines.join('\n') || '- （本周无新增）'}
 
-### 五、结论与待办
+### 五、待补拆解
+
+${unsplitAll.length} 篇原文已经归档进 \`02 原始资料\`，但还没有被任何 \`03 提炼笔记\` 的 \`source\` 引用——它们缺的是原子笔记，不是归档。
+
+${unsplitLines.join('\n')}
+
+### 六、结论与待办
 
 - 本次自动补齐 ${fixed.filter((entry) => entry.changed).length} 篇笔记的字段，其余缺失项属于判断性问题，未强行改动。
 - 重复笔记只给建议清单，需要你确认后再合并；本插件未删除任何文件。
@@ -337,10 +360,11 @@ ${themeLines.join('\n') || '- （本周无新增）'}
   return {
     ok: true,
     stage: 'inspect',
-    summary: `巡检 ${notes.length} 篇提炼笔记：字段缺失 ${missing.length} 个（已补齐 ${fixed.filter((entry) => entry.changed).length} 篇）、疑似重复 ${duplicates.length} 对、链接问题 ${broken.length} 条；周报已写入 05 我的产出。`,
+    summary: `巡检 ${notes.length} 篇提炼笔记：字段缺失 ${missing.length} 个（已补齐 ${fixed.filter((entry) => entry.changed).length} 篇）、疑似重复 ${duplicates.length} 对、链接问题 ${broken.length} 条、待补拆解 ${unsplitAll.length} 篇；周报已写入 05 我的产出。`,
     warnings,
     missing: fixed.map((entry) => ({ file: entry.file, reasons: entry.reasons, changed: entry.changed })),
     duplicates,
+    unsplit: { count: unsplitAll.length, files: unsplitFiles },
     links: {
       checked: targets.length,
       total: links.length,
