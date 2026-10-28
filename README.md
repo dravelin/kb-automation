@@ -22,7 +22,7 @@
 | `inspect` | 第四段 | 补标签/摘要、给重复笔记的合并建议、查外链、算本周新增与主题分布，写周报到 `05 我的产出` |
 | `board` | — | 只返回建卡方案：每日「收集 + 提炼」与每周「巡检 + 周报」两张卡片（id/标题/描述/自包含 prompt/cron），不写任何文件 |
 | `all` | — | 依次执行前四个阶段（不含 `board`） |
-| `status` | — | 只读体检：各目录篇数、收件箱待处理清单、任务文件是否存在 |
+| `status` | — | 只读体检：各目录篇数、收件箱待处理清单 |
 
 ## 01 收件箱 与 02 原始资料
 
@@ -55,7 +55,6 @@
 | 字段 | 默认值 | 说明 |
 | --- | --- | --- |
 | `vault` | `F:/dataobs` | 知识库根目录；调用时可用 `vault` 参数覆盖 |
-| `taskFile` | `F:/test/11/1.md` | 任务说明文件，`status` 阶段检查它是否存在 |
 | `maxCollect` | `6` | collect 默认收录上限 |
 | `topics` | 见 `src/collect.js` 的 `DEFAULT_TOPICS` | 检索词 |
 | `linkCheckLimit` | `20` | inspect 每次最多验证多少条外链 |
@@ -112,6 +111,10 @@ kb_automate {"stage":"board","vault":"F:/dataobs"}
 - **`inspect` 周报新增「待补拆解」一节。** 扫 `02 原始资料`，列出没有任何 `03 提炼笔记` 的 `source: "[[...]]"` 引用到的原文（数量 + 前 10 个文件名），它们缺的只是原子笔记。
 - 版本号 `2.0.0` → `2.0.1`，`BUILD` 同步为 `kb-automation@2.0.1`。
 
+### 2.0.2：移除残留的任务说明文件依赖
+
+纯清理，不改任何阶段的运行逻辑：`status` 不再检查任务说明文件（返回值里不再有对应字段，渲染里不再有「任务文件」一行），该配置项已删除，插件不再引用任何外部任务文档。
+
 ## 实现要点
 
 - **模型参与判断，插件负责落地。** 选篇、摘要、拆解用 `ctx.llm`（走当前 profile 默认模型），文件命名、frontmatter 字段顺序、标签维度、去重、索引插入都由代码确定性完成，所以重复执行不会产生格式漂移。
@@ -126,10 +129,10 @@ kb_automate {"stage":"board","vault":"F:/dataobs"}
 `INSTALL.md` 是给另一台机器的安装说明；打包命令：
 
 ```bash
-tar -a -c -f kb-automation-2.0.1.zip -C <父目录> kb-automation
+tar -a -c -f kb-automation-2.0.2.zip -C <父目录> kb-automation
 ```
 
-解压后把 `cordis.patch.yml` 里的 `vault` / `taskFile` 改成目标机器的路径，再 `plugin_manager install_bundle`。
+解压后把 `cordis.patch.yml` 里的 `vault` 改成目标机器的路径，再 `plugin_manager install_bundle`。
 
 ## 安全边界
 

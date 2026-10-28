@@ -194,6 +194,5 @@ export async function runInit({ ctx, vaultRoot, config }) {
     warnings,
     counts,
     tree: await vault.tree(),
-    taskFile: config?.taskFile ?? '',
   }
 }

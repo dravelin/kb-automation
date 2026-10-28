@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "Knowledge Base Automation",
-    "description": "Runs the knowledge-base pipeline from 1.md: build the folder skeleton, collect fresh material, organize 01 收件箱 into atomic notes (archived inbox copies are deleted, nothing else is), produce a weekly inspection report, and propose the daily/weekly scheduled board cards."
+    "description": "Runs the knowledge-base pipeline: build the folder skeleton, collect fresh material, organize 01 收件箱 into atomic notes (archived inbox copies are deleted, nothing else is), produce a weekly inspection report, and propose the daily/weekly scheduled board cards."
   }
 }

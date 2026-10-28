@@ -1,6 +1,6 @@
 # 安装说明（另一台电脑）
 
-这个目录是一个 DSH Host 插件包（bundle），提供工具 `kb_automate`，按 `1.md` 的四段任务跑知识库流水线；v2 另带一个 `board` 阶段，产出每日/每周定时任务卡片的建卡方案。
+这个目录是一个 DSH Host 插件包（bundle），提供工具 `kb_automate`，按 init / collect / process / inspect 四个阶段跑知识库流水线；v2 另带一个 `board` 阶段，产出每日/每周定时任务卡片的建卡方案。
 
 ## 0. 前置条件
 
@@ -20,7 +20,7 @@ D:\dsh-plugins\kb-automation
 
 ## 2. 改配置
 
-打开 `cordis.patch.yml`，把两个路径改成这台机器上的实际位置：
+打开 `cordis.patch.yml`，把 `vault` 改成这台机器上的实际位置：
 
 ```yaml
 - insert:
@@ -28,7 +28,6 @@ D:\dsh-plugins\kb-automation
       name: '@local/kb-automation'
       config:
         vault: D:/我的知识库        # 知识库根目录，不存在会自动创建六个中文目录
-        taskFile: D:/任务/1.md      # 只用于 status 阶段做存在性检查，可以留空
         maxCollect: 6
 ```
 
@@ -113,7 +112,7 @@ D:\dsh-plugins\kb-automation
 | `ERR_PNPM_GIT_FETCH_FAILED ... SEC_E_NO_CREDENTIALS` | Git 的 schannel 后端取不到凭证（profile 里有 github 依赖时会触发） | `git config --global http.sslBackend openssl` |
 | `URL hostname "xxx" resolves to a non-public IP address` | 本机 DNS 把公网域名解析到保留地址（Clash fake-ip 之类），被 harness 的抓取策略拒绝 | 插件默认会自动改用直连抓取并在结果里告警；想强制走某一种，设 `fetchMode: "web"` 或 `"direct"` |
 | 收件箱笔记没被处理 | `status` 不是 `inbox`，或正文不足 40 字，或没有可用模型 | 看结果里的 `kept` 字段，它写明每条未处理的原因 |
-| 收集阶段 0 篇 | 检索结果都过期/重复，或抓不到正文 | 看 `warnings` 与 `rejected`，1.md 允许「少收几篇并说明原因」 |
+| 收集阶段 0 篇 | 检索结果都过期/重复，或抓不到正文 | 看 `warnings` 与 `rejected`，少收几篇时结果里会说明原因 |
 
 ## 7. v2 变更（1.1.0 → 2.0.0）
 

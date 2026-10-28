@@ -1,4 +1,3 @@
-import { exists, readText } from './util.js'
 import { Vault, FOLDERS } from './vault.js'
 import { runInit } from './init.js'
 import { runCollect } from './collect.js'
@@ -7,8 +6,7 @@ import { runInspect } from './inspect.js'
 import { complete, currentModel, extractJson, llmReady } from './llm.js'
 
 export const DEFAULT_VAULT = 'F:/dataobs'
-export const DEFAULT_TASK_FILE = 'F:/test/11/1.md'
-export const BUILD = 'kb-automation@2.0.1'
+export const BUILD = 'kb-automation@2.0.2'
 
 const STAGE_LABEL = {
   init: '建库',
@@ -85,23 +83,13 @@ function summarizeStage(result) {
   return result.summary
 }
 
-async function runStatus({ vaultRoot, taskFile, config }) {
+async function runStatus({ vaultRoot, config }) {
   const vault = new Vault(vaultRoot)
   const inbox = await vault.inboxNotes()
   const notes = await vault.noteNotes()
   const raw = await vault.rawNotes()
   const moc = await vault.mocNotes()
   const outputs = await vault.outputNotes()
-  const taskExists = await exists(taskFile)
-  let taskNote = taskExists ? '任务文件存在' : '任务文件不存在'
-  if (taskExists) {
-    try {
-      const text = await readText(taskFile)
-      taskNote = `任务文件存在（${text.length} 字符）`
-    } catch {
-      taskNote = '任务文件存在但不可读'
-    }
-  }
   const pending = inbox.filter((note) => String(note.status).toLowerCase() === 'inbox')
   return {
     ok: true,
@@ -109,7 +97,6 @@ async function runStatus({ vaultRoot, taskFile, config }) {
     build: BUILD,
     summary: `收件箱 ${inbox.length} 篇（待处理 ${pending.length} 篇），提炼笔记 ${notes.length} 篇，原始资料 ${raw.length} 篇，主题索引 ${moc.length} 篇，产出 ${outputs.length} 篇。`,
     vault: vault.root.replace(/\\/g, '/'),
-    taskFile: { path: taskFile, exists: taskExists, note: taskNote },
     counts: { inbox: inbox.length, pending: pending.length, notes: notes.length, raw: raw.length, moc: moc.length, outputs: outputs.length },
     pending: pending.map((note) => `${FOLDERS.inbox}/${note.name}`),
     config: { topics: config?.topics ?? null, maxCollect: config?.maxCollect ?? null, linkCheckLimit: config?.linkCheckLimit ?? null },
@@ -243,7 +230,6 @@ function renderResult(args, value) {
   }
 
   if (value.stage === 'status') {
-    lines.push('', `- 任务文件：${value.taskFile.note}`)
     if (value.build) lines.push(`- 构建：${value.build}`)
     if (value.pending?.length) lines.push('', '**待处理**', ...value.pending.map((item) => `- ${item}`))
   }
@@ -332,7 +318,6 @@ export function createTool(ctx, config) {
     async execute(args, exec) {
       const stage = String(args?.stage ?? 'status')
       const vaultRoot = String(args?.vault ?? config?.vault ?? DEFAULT_VAULT)
-      const taskFile = String(config?.taskFile ?? DEFAULT_TASK_FILE)
       const signal = exec?.signal
       const limit = args?.limit
       const topics = Array.isArray(args?.topics) ? args.topics.map((item) => String(item)).filter(Boolean) : null
@@ -344,7 +329,7 @@ export function createTool(ctx, config) {
       }
 
       if (stage === 'status') {
-        return JSON.parse(JSON.stringify({ ...(await runStatus({ vaultRoot, taskFile, config })), ...base }))
+        return JSON.parse(JSON.stringify({ ...(await runStatus({ vaultRoot, config })), ...base }))
       }
 
       if (stage === 'init') {
