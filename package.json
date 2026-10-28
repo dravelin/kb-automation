@@ -1,9 +1,9 @@
 {
   "name": "@local/kb-automation",
-  "version": "1.1.0",
+  "version": "2.0.0",
   "private": true,
   "type": "module",
-  "description": "DSH Host plugin: runs the four-stage personal knowledge-base pipeline described in F:/test/11/1.md (build structure, collect, organize, inspect).",
+  "description": "DSH Host plugin: runs the personal knowledge-base pipeline described in F:/test/11/1.md — 01 收件箱 stages both collected articles and user-dropped .md files, process archives them into 02 原始资料 and deletes only those archived inbox copies, plus atomic notes, weekly inspection, and a board stage that proposes daily/weekly scheduled task cards.",
   "exports": {
     ".": "./index.js",
     "./locale/*.json": "./locale/*.json",

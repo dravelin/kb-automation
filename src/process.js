@@ -1,12 +1,11 @@
 import path from 'node:path'
-import { exists, clip, isoDate, noteFileName, oneLine, sanitizeTitle, toSentence, writeText, uniqueList } from './util.js'
+import { exists, clip, deleteFile, mtimeDate, noteFileName, oneLine, sanitizeTitle, titleFromFileName, toSentence, writeText, uniqueList } from './util.js'
 import {
   getField,
   insertUnderHeading,
   normalizeTags,
   orderFields,
   sectionBody,
-  setField,
   splitFrontmatter,
   stringifyFrontmatter,
   tagList,
@@ -287,27 +286,73 @@ async function archiveOriginal(vault, note) {
   return { file: target, created: true }
 }
 
-function markProcessed(note, atomLinks) {
-  const fields = note.fields.map((field) => ({ ...field }))
-  const tags = normalizeTags([
-    ...(Array.isArray(getField(fields, 'tags')) ? getField(fields, 'tags') : []).filter((tag) => !tag.startsWith('状态/')),
-    '状态/已归档',
+const NAME_DATE = /^(\d{4}-\d{2}-\d{2})-/
+const INBOX_TAGS = ['主题/未分类', '类型/观点', '状态/待归档']
+const CANON_KEYS = new Set(['title', 'type', 'source', 'author', 'created', 'tags', 'status'])
+
+function firstHeading(body) {
+  const match = /^#\s+(.+)$/m.exec(String(body ?? ''))
+  return match ? oneLine(match[1]) : ''
+}
+
+/**
+ * 用户手丢进收件箱的裸 md 没有 frontmatter/status，先补齐再排队。
+ * 已归一化的笔记原样返回，保证幂等（第二次运行不改日期、不改名）。
+ */
+async function normalizeInboxNote(vault, note) {
+  if (note.unreadable) return note
+  // 空文件补 frontmatter 会把它变成「有内容」的笔记，正文却仍是空的，原样留在收件箱
+  if (!String(note.text ?? '').trim()) return note
+  if (note.hasFrontmatter && note.fields.some((field) => field.key === 'status')) return note
+
+  const nameDate = NAME_DATE.exec(note.name)
+  const created = oneLine(String(getField(note.fields, 'created') ?? ''))
+    || (nameDate ? nameDate[1] : '')
+    || (await mtimeDate(note.path))
+  const day = /^\d{4}-\d{2}-\d{2}/.test(created) ? created.slice(0, 10) : await mtimeDate(note.path)
+  const title = oneLine(String(getField(note.fields, 'title') ?? ''))
+    || firstHeading(note.body)
+    || titleFromFileName(note.name)
+    || '未命名'
+  // 用户自带的标签一个都不丢；只在没有状态标签时补一条
+  const tags = !note.tags.length
+    ? [...INBOX_TAGS]
+    : note.tags.some((tag) => tag.startsWith('状态/')) ? [...note.tags] : [...note.tags, '状态/待归档']
+
+  const fields = orderFields([
+    { key: 'title', value: title },
+    { key: 'type', value: String(getField(note.fields, 'type') ?? '') || 'raw' },
+    { key: 'source', value: String(getField(note.fields, 'source') ?? '') },
+    { key: 'author', value: String(getField(note.fields, 'author') ?? '') || '我' },
+    { key: 'created', value: created },
+    { key: 'tags', value: tags },
+    { key: 'status', value: 'inbox' },
+    // 原文自带的其它字段（如 published）原样保留，不擅自丢弃
+    ...note.fields.filter((field) => !CANON_KEYS.has(field.key)).map((field) => ({ ...field })),
   ])
-  setField(fields, 'tags', tags)
-  setField(fields, 'status', 'processed')
-  let body = note.body
-  for (const link of atomLinks) {
-    body = insertUnderHeading(body, '## 相关笔记', `- [[${link}]]`)
+
+  let target = note.path
+  if (!nameDate) {
+    const candidate = path.join(vault.dir(FOLDERS.inbox), noteFileName(day, sanitizeTitle(title)))
+    // 目标名已被另一篇占用时保持原名，绝不覆盖
+    if (!(await exists(candidate))) target = candidate
   }
-  return { fields: orderFields(fields), body }
+  const body = String(note.body ?? '').trim()
+  await writeText(target, `${stringifyFrontmatter(fields)}\n\n${body}\n`)
+  if (target !== note.path) await deleteFile(note.path)
+  return await vault.load(target)
 }
 
 export async function runProcess({ ctx, vaultRoot, config, signal, limit }) {
   const vault = new Vault(vaultRoot)
-  const inbox = await vault.inboxNotes()
-  const pending = inbox.filter((note) => String(note.status || '').toLowerCase() === 'inbox')
+  const inbox = []
+  for (const note of await vault.inboxNotes()) inbox.push(await normalizeInboxNote(vault, note))
+  // 空文件不做归一化，因而没有 status：单独放行，让它落到 kept 分支说明原因
+  const pending = inbox.filter((note) => String(note.status || '').toLowerCase() === 'inbox'
+    || (!note.unreadable && !String(note.text ?? '').trim()))
   const warnings = []
   const processed = []
+  const removed = []
   const kept = []
   const newAtoms = []
   const mocChanges = []
@@ -402,6 +447,15 @@ export async function runProcess({ ctx, vaultRoot, config, signal, limit }) {
 
     const date = noteDate(note)
     const archive = await archiveOriginal(vault, note)
+    // 02 已有同名文件也算内容已归档（created 为 false），收件箱副本同样清理；kept 分支走不到这里
+    let removedFile = ''
+    try {
+      await deleteFile(note.path)
+      removedFile = `${FOLDERS.inbox}/${note.name}`
+      removed.push(removedFile)
+    } catch (error) {
+      warnings.push(`${note.name}：收件箱副本删除失败（${error.message}）。`)
+    }
     const atomBases = []
     const writtenAtoms = []
 
@@ -442,9 +496,7 @@ export async function runProcess({ ctx, vaultRoot, config, signal, limit }) {
       }
     }
 
-    const updated = markProcessed(note, atomBases)
-    await writeText(note.path, `${stringifyFrontmatter(updated.fields)}\n\n${updated.body.trim()}\n`)
-    processed.push({
+    const entry = {
       file: `${FOLDERS.inbox}/${note.name}`,
       title: rawTitle,
       summary: toSentence(rawSummary, 80),
@@ -452,7 +504,10 @@ export async function runProcess({ ctx, vaultRoot, config, signal, limit }) {
       archiveCreated: archive.created,
       atoms: writtenAtoms,
       notes: asString(extraction?.notes),
-    })
+      removed: Boolean(removedFile),
+    }
+    if (removedFile) entry.removedFile = removedFile
+    processed.push(entry)
   }
 
   const remaining = (await vault.inboxNotes()).filter((note) => String(note.status || '').toLowerCase() === 'inbox')
@@ -461,10 +516,11 @@ export async function runProcess({ ctx, vaultRoot, config, signal, limit }) {
     ok: true,
     stage: 'process',
     summary: processed.length
-      ? `处理 ${processed.length} 篇，拆出 ${newAtoms.length} 条原子笔记，更新 ${mocChanges.length} 处主题索引。`
+      ? `处理 ${processed.length} 篇，拆出 ${newAtoms.length} 条原子笔记，更新 ${mocChanges.length} 处主题索引，清理收件箱 ${removed.length} 篇。`
       : '收件箱没有待处理的 inbox 笔记。',
     warnings,
     processed,
+    removed,
     kept,
     newAtoms,
     moc: mocChanges,

@@ -8,13 +8,14 @@ import { complete, currentModel, extractJson, llmReady } from './llm.js'
 
 export const DEFAULT_VAULT = 'F:/dataobs'
 export const DEFAULT_TASK_FILE = 'F:/test/11/1.md'
-export const BUILD = 'kb-automation@1.1.0'
+export const BUILD = 'kb-automation@2.0.0'
 
 const STAGE_LABEL = {
   init: '建库',
   collect: '收集',
   process: '整理',
   inspect: '巡检',
+  board: '看板',
   all: '全流程',
   status: '状态',
   selftest: '模型自检',
@@ -115,6 +116,44 @@ async function runStatus({ vaultRoot, taskFile, config }) {
   }
 }
 
+function runBoard({ vault }) {
+  const root = vault.replace(/\\/g, '/')
+  const timeZone = 'Asia/Shanghai'
+  const dailyPrompt =
+    `调用 kb_automate 工具，依次执行两个阶段：先 {"stage":"collect","vault":"${root}"}，再 {"stage":"process","vault":"${root}"}。` +
+    'process 只处理 01 收件箱里 status=inbox 的笔记，以及没有 frontmatter 的裸 .md（插件会补日期与 frontmatter），其余笔记跳过。' +
+    '全部跑完后用简洁中文汇报：collect 新收录几篇及标题；process 处理了几篇、拆出几条原子笔记、更新了哪些主题索引、清理了哪些收件箱副本；' +
+    '以及保留在收件箱待人工处理的笔记和原因。'
+  const weeklyPrompt =
+    `调用 kb_automate 工具，执行 {"stage":"inspect","vault":"${root}"}。` +
+    '跑完后用简洁中文汇报：字段缺失的笔记、疑似重复的笔记（只给建议，不删除）、外链检查结果（失效与无法验证各几条）、本周新增统计，以及本次周报写入的完整路径。'
+
+  return {
+    ok: true,
+    stage: 'board',
+    vault: root,
+    summary: '产出 2 张定时卡片方案：每日 08:00 收集+提炼，每周一 09:00 巡检+周报；建卡需由 DSH 会话调用 task_board_create。',
+    timeZone,
+    cards: [
+      {
+        id: 'daily',
+        title: '知识库日常：收集 + 提炼',
+        description: '每天 08:00 抓取当日 AI 素材进 01 收件箱，并把收件箱整理成原子笔记：原文搬进 02 原始资料、拆解到 03 提炼笔记、链接进 04 主题索引。',
+        prompt: dailyPrompt,
+        schedule: { enabled: true, mode: 'cron', cron: '0 8 * * *', timeZone },
+      },
+      {
+        id: 'weekly',
+        title: '知识库周检：巡检 + 周报',
+        description: '每周一 09:00 巡检整个知识库：字段缺失、疑似重复、外链失效，并把本周新增统计写成周报落到 05 我的产出。',
+        prompt: weeklyPrompt,
+        schedule: { enabled: true, mode: 'cron', cron: '0 9 * * 1', timeZone },
+      },
+    ],
+    notes: ['建卡需由 DSH 会话调用 task_board_create，再用 task_board_schedule 挂 cron；本阶段不写任何文件。'],
+  }
+}
+
 function renderResult(args, value) {
   const lines = [`## 知识库${STAGE_LABEL[value.stage] ?? value.stage}`]
   if (value.vault) lines.push(`- 仓库：\`${value.vault}\``)
@@ -144,8 +183,13 @@ function renderResult(args, value) {
       for (const item of value.processed) {
         lines.push(`- \`${item.file}\``)
         lines.push(`  - 存档：\`${item.archived}\`${item.archiveCreated ? '（新建）' : '（已存在，未覆盖）'}`)
+        if (item.removed) lines.push(`  - 收件箱副本：已删除${item.removedFile ? `（\`${item.removedFile}\`）` : ''}`)
         for (const atom of item.atoms) lines.push(`  - 原子笔记：\`${atom.file}\``)
       }
+    }
+    if (value.removed?.length) {
+      lines.push('', '**已清理收件箱**')
+      for (const item of value.removed) lines.push(`- \`${item}\``)
     }
     if (value.kept?.length) {
       lines.push('', '**保留在收件箱**')
@@ -178,6 +222,16 @@ function renderResult(args, value) {
       )
     }
     if (value.report) lines.push('', `周报：\`${value.report}\``)
+  }
+
+  if (value.stage === 'board') {
+    if (value.timeZone) lines.push('', `时区：\`${value.timeZone}\``)
+    for (const card of value.cards ?? []) {
+      lines.push('', `**${card.id} — ${card.title}**`)
+      lines.push(`- cron：\`${card.schedule?.cron ?? '—'}\`（${card.schedule?.enabled ? '已启用' : '未启用'}）`)
+      lines.push('', '```text', card.prompt, '```')
+    }
+    if (value.notes?.length) lines.push('', ...value.notes.map((item) => `- ${item}`))
   }
 
   if (value.stage === 'status') {
@@ -213,19 +267,27 @@ export function createTool(ctx, config) {
   const tool = {
     name: 'kb_automate',
     description:
-      'Knowledge-base automation for the vault at F:/dataobs. One tool, five stages: ' +
+      'Knowledge-base automation for the vault at F:/dataobs. One tool, six stages: ' +
       'init (verify/create the six Chinese folder skeleton, 笔记模板.md, 知识库规范.md), ' +
       'collect (search the web for today\'s AI Agent / AI pricing / AI case material and drop notes into 01 收件箱), ' +
-      'process (archive every status=inbox note into 02 原始资料, split it into atomic notes under 03 提炼笔记/{概念,方法,案例}, tag them, and link them from 04 主题索引), ' +
+      'process (move every status=inbox note into 02 原始资料, split it into atomic notes under 03 提炼笔记/{概念,方法,案例}, tag them, and link them from 04 主题索引), ' +
       'inspect (check missing fields/duplicates/dead links, then write a weekly report into 05 我的产出), ' +
-      'all (init, collect, process, inspect in order). Writes only via additive files and field updates; it never deletes or merges anything.',
+      'board (return the card plan for a daily and a weekly scheduled task — two cards to create with task_board_create plus cron schedules for task_board_schedule; it writes no file), ' +
+      'all (init, collect, process, inspect in order). ' +
+      '01 收件箱 is the staging area for raw articles still waiting to be processed: both what the plugin collected and .md files the user saved straight from a browser — frontmatter is optional, the plugin fills in the date and frontmatter. ' +
+      'Notes are filed as YYYY-MM-DD-标题.md named after the collection day, with the original publication date kept in frontmatter published. ' +
+      'process is a move, not a merge: once an inbox note is archived into 02 原始资料 (also when 02 already holds a file of the same name) the 01 收件箱 copy is deleted; notes that fail to split stay in 01 收件箱 for manual handling. ' +
+      'The only deletion is that archived 01 收件箱 copy — files in 02 原始资料, 03 提炼笔记, 04 主题索引 and 05 我的产出 are never deleted or merged.',
     parameters: {
       type: 'object',
       properties: {
         stage: {
           type: 'string',
-          enum: ['init', 'collect', 'process', 'inspect', 'all', 'status', 'selftest'],
-          description: 'Which pipeline stage to run. all = init → collect → process → inspect. selftest only probes the model route.',
+          enum: ['init', 'collect', 'process', 'inspect', 'board', 'all', 'status', 'selftest'],
+          description:
+            'Which pipeline stage to run. all = init → collect → process → inspect. ' +
+            'board = 建卡方案 only (no file writes; the session must call task_board_create then task_board_schedule). ' +
+            'selftest only probes the model route.',
         },
         vault: { type: 'string', description: 'Vault root. Defaults to the plugin config (F:/dataobs).' },
         topics: {
@@ -293,6 +355,10 @@ export function createTool(ctx, config) {
       if (stage === 'inspect') {
         const result = await runInspect({ ctx, vaultRoot, config, signal })
         return JSON.parse(JSON.stringify({ ...result, ...base }))
+      }
+
+      if (stage === 'board') {
+        return JSON.parse(JSON.stringify({ ...runBoard({ vault: vaultRoot }), ...base }))
       }
 
       if (stage === 'all') {

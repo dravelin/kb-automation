@@ -23,6 +23,11 @@ export async function writeText(file, text) {
   await fs.writeFile(file, text, 'utf8')
 }
 
+/** Remove one file; a missing target is not an error. */
+export async function deleteFile(file) {
+  await fs.rm(file, { force: true })
+}
+
 export async function listDir(dir) {
   try {
     return await fs.readdir(dir, { withFileTypes: true })
@@ -56,6 +61,12 @@ export function pad2(value) {
 /** Local calendar date as YYYY-MM-DD. */
 export function isoDate(date = new Date()) {
   return `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())}`
+}
+
+/** Modification date of `file` as YYYY-MM-DD. */
+export async function mtimeDate(file) {
+  const stat = await fs.stat(file)
+  return isoDate(stat.mtime)
 }
 
 export function daysAgo(count, from = new Date()) {
